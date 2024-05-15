@@ -42,6 +42,16 @@ def training_init(num_classes, num_features):
     This creates the array of weights from each perceptron to each output (256x10). We want the weights to be small, random, and non-zero, 
     so we generate random standard normally distributed weights (bell curve, mean 0, std dev. 1) and multiply them all by 0.01 to make them small.
     We want the weights to be small to avoid overfitting, underfitting, local minima, and local maxima.
+    
+    Why initialize weights like this?
+    - If the weights are zero, the outputs will be zero and no learning will occur (Input * 0 = 0).
+    - If any given weight is significantly larger or smaller than the others, that weight will have a skewed affect on learning (e.g. disproportionate influence on outputs & gradients).
+    - Randomization breaks symmetry, so several neurons do not have the same behavior unintentionally.
+    - Since small networks like linear classifiers don't involve backpropagation, which uses the chain rule to derive the weights for deeper layers, initializing weights like we do here is okay.
+       - In deeper networks, weights being too small can cause them to vanish as the chain rule will result in small weights multiplying together and getting smaller as we go deeper.
+       - Likewise, large weights will cause activation functions to saturate as we go deeper, and learning becomes very unstable as they cause weights to change too much. 
+       - Deeper networks can use methods like Xavier Initialization to scale the initial weights to the size of the network so they do not vanish or explode.
+    - Like most things, there is no one best way to initialize weights for all models.
     """
     weights = 0.01 * np.random.randn(num_classes, num_features)
 
@@ -58,8 +68,35 @@ def training_init(num_classes, num_features):
     We want each row to be the one-hot encoded label for an input for the way this code is written.
     """
     training_labels = np.genfromtxt(r'data\\training_targets_10x1000_0or1.csv', dtype=np.float64, delimiter=',').transpose()
-    
+
     return weights, training_data, training_labels
+
+
+"""
+Summary: Reads in the validation data and labels.
+Inputs:  
+Returns: validation_data - Full validation dataset 1000x256.
+         validation_labels - Ground truth labels for each validation input 1000x10.
+"""
+def validation_init():
+    validation_data = np.genfromtxt(r'data\\validation_inputs_256x1000.csv', dtype=np.float64, delimiter=',').transpose() # Read in validation dataset
+    validation_labels = np.genfromtxt(r'data\\validation_targets_10x1000_0or1.csv', dtype=np.float64, delimiter=',').transpose() # Read in labels for the validation dataset
+
+    return validation_data, validation_labels
+
+
+"""
+Summary: Reads in the test data and labels.
+Inputs:  
+Returns: test_data - Full test dataset 1000x256.
+         test_labels - Ground truth labels for each test input 1000x10.
+"""
+def test_init():
+    test_data = np.genfromtxt(r'data\\test_inputs_256x9000.csv', dtype=np.float64, delimiter=',').transpose() # Read in test dataset
+    test_labels = np.genfromtxt(r'data\\test_targets_10x9000_0or1.csv', dtype=np.float64, delimiter=',').transpose() # Read in labels for the test dataset
+
+    return test_data, test_labels
+
 
 """
 Summary: Takes the raw prediction values for each potential output of a given input and applies the softmax equation to them...
@@ -70,6 +107,21 @@ Inputs:  logits - Raw class prediction values from each input in a batch
 Returns: Probability percentage predictions for each class for each input in the batch. Sum of predictions for each input should equal 1.00.
 """
 def softmax(logits):
+    """
+    Why use softmax?
+    - Activation functions introduce nonlinearity. The real world is not linear and activation functions allow us to more accurately model how we classify in the real world.
+    - In softmax, exponentiating ensures probabilities are positive and sum to 1 whereas sigmoid just ensures each output is between 0 and 1. 
+      It also emphasizes larger raw prediction values over smaller ones. This way, confident guesses have more influence, positive or negative, over the training of the model.
+    - Probabilities are easier for us (humans) to interpret.
+    - We calculate cross entropy loss with the probabilities.
+    - Softmax is considered "smooth" because its slope does not change sharply at any point,...
+      ...meaning that differentiating it will not result in large and/or unstable changes in gradients during backpropagation later on.
+    - With softmax, sigmoid, and tanh, if logits are too big or small, the gradients can become extremely small or saturated, and learning will be very slow or unstable.
+       - Small gradients get exponentially smaller still when differentiating during back propagation, effectively disappearing and taking learning speed to a halt.
+       - Large gradients can get exponentially larger, "exploding", making learning unstable and difficult or impossible to converge.
+       - Activation functions like ReLU do not saturate, which is why they are particularly popular for hidden layers.
+    """
+    
     exps = np.exp(logits - np.max(logits, axis=1, keepdims=True)) # each value of this array is Euler's number e to the power of each logit value
     
     # Divides the value at each index of the array produced by the line above by the sum of all indices of the array produced by the line above. 
@@ -85,6 +137,12 @@ Returns: Average cross entropy loss for the batch.
 """
 def cross_entropy_loss(y_true, probabilities):
     """
+    Why use cross entropy loss?
+    - Cross entropy loss gives us a mathematical method for punishing significantly incorrect class predictions much more than somewhat incorrect predictions.
+    - The worse the guess, the worse the cross entropy loss is logarithmically. 95% probability for the correct class has a loss of 0.05, while 10% has a loss of 2.3.
+    - This makes it clear when performance is especially poor so we can adjust hyperparameters to minimize the loss faster.
+    - It also helps quantify the performance of the model by giving us one number to represent how good or bad the predictions are.
+    
     The argument to np.log indexes into the probabilities array to get a prediction value for each input.
     range(len(probabilities)) selects the index for all training inputs.
     y_true.argmax(axis=1) gets the prediction value that each input made for the correct class by...
@@ -110,6 +168,14 @@ Returns: The average gradient value for each feature (pixel) of the inputs.
 """
 def compute_gradients(input_batch, label_batch, probabilities):
     """
+    What are gradients, what do they do, and why?
+    - The gradient is a vector that points in the direction and with the magnitude of steepest increase in loss. That means to minimize loss, we want to subtract the gradients from the weights.
+    - When computing the gradient, we are calculating how much the weight of each neuron needs to be changed to reduce the error in its output for a given input. 
+    - We calculate the error of each neuron's output, and calculate its dot product with the input to find how far off the weight of each neuron was from giving us the correct output. 
+    - Adjusting each weight by its gradient will reduce the error in its output, but if we don't limit how big the gradients are, ... 
+      ...the network could learn too fast, too slow, settle in local minima/maxima, or be too biased toward certain inputs.
+    - Learning rates (implemented later when updating the weights) scale how big the gradients can be to tune how much they can affect the weights in one epoch.
+
     We subtract the one-hot encoded ground truth labels from the predictions to get how far off each prediction was from its perfect correct predictions (the ground truth).
     So each prediction value for the incorrect classes remain the same, because they should be zero, and whatever number they are is how far off of zero they are.
     The prediction for the correct class for each input has 1 subtracted from it, so if the prediction is 0.78, the error is -0.22, because the prediction was 0.22 under what it should be.
@@ -117,7 +183,7 @@ def compute_gradients(input_batch, label_batch, probabilities):
     errors = probabilities - label_batch
 
     """
-    Here, we perform a dot product of the transposed input batch and the errors. This quantifies how much each input feature effects the error.
+    Here, we perform a dot product of the transposed input batch and the errors. This tells us how much each weight needs to be adjusted to reduce the error.
     We divide by the number of inputs in the batch to get the average gradient for the batch so we can adjust the weights.
     This tells us how much and in what direction we need to adjust the weights for each feature.
     """
@@ -133,11 +199,32 @@ Returns: The updated array of weights for each input feature (pixel).
 """
 def update_weights(weights, gradients, learning_rate):
     """
+    The gradient is a vector that points in the direction and with the magnitude of steepest increase in loss.
+    That means to minimize loss, we want to subtract the gradients from the weights.
     We multiply the gradients by the learning rate to adjust how big of an adjustment the gradients are allowed to make on the weights in on training pass.
     The learning rate should be tuned to avoid overshooting, undershooting, and local minima/maxima.
     Once we adjust the gradients with the learning rate, we subtract them from the weights to obtain our new and improved weights.
     """
     return weights - (learning_rate * gradients) # added parentheses around learning_rate * gradients according to order of operations to improve readability and clarity
+
+
+"""
+Summary: Calculates which of the highest probabilities from each input align with their labels, then computes the total count
+         of matches for the dataset and what percentage of the total were correctly predicted.
+Inputs:  probabilities - The output probabilities for each input.
+         one_hot_labels - The one-hot encoded ground truth labels for each input.
+Returns: matches - An array for whether each input matched its label or not (0 = not matched, 1 = match)
+         num_matches - Total number of inputs whose index for their highest output probability matched the true index of their one-hot encoded label.
+         percent_match - Percentage of correctly guessed outputs out of the total number of inputs.
+"""
+def calc_performance(probabilities, one_hot_labels):
+    highest_predicted_indices = np.argmax(probabilities, axis=1) # Get the index of the highest probability output for each input
+    true_label_indices = np.argmax(one_hot_labels, axis=1) # get the index of the true label for each input
+    matches = highest_predicted_indices == true_label_indices # check if the highest pridiction index matches the ground truth index for each input
+    num_matches = np.sum(matches) # sum how many inputs predicted their label correctly
+    percent_match = (num_matches / len(one_hot_labels)) * 100 # calc percentage of correct predictions
+
+    return matches, num_matches, percent_match
 
 
 """
@@ -151,7 +238,7 @@ Inputs:  training_data - Full dataset of training images.
 Returns: weights - Final weights after training is complete.
          loss - Final cross entropy loss value to quantify the performance of the linear classifier on the training dataset.
 """
-def train(training_data, training_labels, weights, epochs, batch_size, learning_rate):
+def train(training_data, training_labels, weights, epochs, batch_size, learning_rate, validation_data, validation_labels):
     # Training loop
     for epoch in range(epochs): # one loop = one full training pass of all of the training data
         for i in range(0, len(training_data), batch_size): # breaks the training dataset into batches. i starts at 0 and increases by batch_size each loop.
@@ -167,13 +254,17 @@ def train(training_data, training_labels, weights, epochs, batch_size, learning_
             gradients = compute_gradients(training_data_batch, training_labels_batch, probabilities) # computes how much and in what direction we need to change the weights for each feature to reduce the error of the predictions
             
             weights = update_weights(weights, gradients.T, learning_rate) # now that the training data is calculated for the batch, us it to adjust the weights to reduce loss and prediction error
-            
+
+        # We perform validation during training to evaluate how well the training is working.
+        # We do this on a dataset that does not overlap with the training data so the model doesn't give a misleadingly good result by "recognizing" the input.
+        validation_num_matches, validation_percent_match, validation_loss = validate(weights, validation_data, validation_labels)
+
         if epoch % 50 == 0: # Every multiple of 50 epochs, we print which epoch we are on and what our loss is to the console
-            print(f"Epoch {epoch}, Loss: {loss}")
+            print(f"Epoch {epoch}")
+            print(f"Validation: {validation_num_matches} / {len(validation_data)} --- {validation_percent_match:.2f}% Correct --- Loss {validation_loss}")
+            print()
     
     save_visual_weights(weights.transpose()) # save the weights as PNG images to visualize them. Result is what looks like a mask for each output number. Transpose the weights so images are created correctly.
-
-    print("\r\nFinal Training Loss: " + str(loss)) # Output the final weights and loss
 
     return weights, loss
 
@@ -205,21 +296,14 @@ Summary: Validates the linear classifier by letting us evaluate the perforance w
 Inputs:  weights - Fully trained weights to be validated.
 Returns: loss - Final cross entropy loss value to quantify the performance of the linear classifier on the validation dataset.
 """
-def validate(weights):
-    validation_data = np.genfromtxt(r'data\\validation_inputs_256x1000.csv', dtype=np.float64, delimiter=',').transpose() # Read in validation dataset
-    validation_labels = np.genfromtxt(r'data\\validation_targets_10x1000_0or1.csv', dtype=np.float64, delimiter=',').transpose() # Read in labels for the validation dataset
-    
+def validate(weights, validation_data, validation_labels):
     logits = np.dot(validation_data, weights.T) # dot product of the inputs with their weights produces a raw prediction value for each class which we refer to as a logit  
     probabilities = softmax(logits) # runs each logit through the softmax equation, which converts the raw predictions into a percentage probability that the input matches a given output 
-    
     loss = cross_entropy_loss(validation_labels, probabilities) # use the ground truth labels and probability guesses to calculate cross entropy loss
 
-    print()
-    print("Example Validation Prediction:      " + str(probabilities[0]))
-    print("Target for Validation Prediction:   " + str(validation_labels[0]))
-    print("Validation Loss:                    " +  str(loss))
+    _, num_matches, percent_match = calc_performance(probabilities, validation_labels) # Calculate validation performace
 
-    return loss # return the loss so it can be used to evaluate the performance
+    return num_matches, percent_match, loss # return the loss so it can be used to evaluate the performance
 
 
 """
@@ -227,38 +311,39 @@ Summary: Tests the trained weights of the linear classifier on a large dataset s
 Inputs:  weights - Fully trained weights to be tested.
 Returns: loss - Final cross entropy loss value to quantify the performance of the linear classifier on the test dataset.
 """
-def test(weights):
-    test_data = np.genfromtxt(r'data\\test_inputs_256x9000.csv', dtype=np.float64, delimiter=',').transpose() # Read in validation dataset
-    test_labels = np.genfromtxt(r'data\\test_targets_10x9000_0or1.csv', dtype=np.float64, delimiter=',').transpose() # Read in labels for the validation dataset
-    
+def test(weights, test_data, test_labels):
     logits = np.dot(test_data, weights.T) # dot product of the inputs with their weights produces a raw prediction value for each class which we refer to as a logit  
     probabilities = softmax(logits) # runs each logit through the softmax equation, which converts the raw predictions into a percentage probability that the input matches a given output 
-    
     loss = cross_entropy_loss(test_labels, probabilities) # use the ground truth labels and probability guesses to calculate cross entropy loss
 
-    print()
-    print("Example Test Prediction:      " + str(probabilities[0]))
-    print("Target for Test Prediction:   " + str(test_labels[0]))
-    print("Testing Loss:                 " +  str(loss))
+    _, num_matches, percent_match = calc_performance(probabilities, test_labels)# Calculate validation performace
 
-    return loss
+    return num_matches, percent_match, loss
 
 
 def main():
     num_features = 256      # Input is 16 x 16 black and white image. 256 pixels, each pixel is a feature. Each fixture is a brightness value 0 to 1.000000000. 9 decimal places.
     num_classes = 10        # Output is the probability of the input image being a given number 0 - 9, so 10 classes total
     
+    # Tunable Training Hyperparameters
     learning_rate = 0.01    # Controls how much each weight is allowed to change in one pass. Tuning this value is important to optimize training speed and results.
     epochs = 1000           # The number of training passes of the full training dataset we will make on the classifier before validation and testing
     batch_size = 32         # This is the number of peices of input data we will process before each adjustment of our weights
 
+    ################################################################################################################################################################
 
     weights, training_data, training_labels = training_init(num_classes, num_features) # initialize small random weights and read in the training data
-    weights, loss = train(training_data, training_labels, weights, epochs, batch_size, learning_rate) # train on training dataset using the parameters set above
+    validation_data, validation_labels = validation_init()
+    weights, training_loss = train(training_data, training_labels, weights, epochs, batch_size, learning_rate, validation_data, validation_labels) # train on training dataset using the parameters set above
 
-    validate(weights) # Run known inputs and with ground truth labels through the linear classifier and calculate the cross entropy loss to validate performance of our weights.
 
-    test(weights)
+    test_data, test_labels = test_init()
+    test_num_matches, test_percent_match, test_loss = test(weights, test_data, test_labels) # Use a large dataset that the model has not seen before, along with their ground truth labels, to evaluate the final performance of the model.
+
+
+    print()
+    print(f"Testing Results:    {test_num_matches} / {len(test_labels)} --- {test_percent_match:.2f}% Correct --- Loss {test_loss}")
+    print()
 
     return
 
